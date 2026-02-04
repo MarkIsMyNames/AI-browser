@@ -1,0 +1,6 @@
+semantic-kernel
+playwright
+pytest
+nest_asyncio
+python-dotenv
+openai
