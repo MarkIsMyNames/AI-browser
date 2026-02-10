@@ -1,5 +1,5 @@
 """
-AI Browser - DOM Distillation & Set-of-Marks
+AI Browser - DOM Distillation
 
 Features:
 - Extracts interactive elements from accessibility tree via CDP
