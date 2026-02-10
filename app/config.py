@@ -12,6 +12,11 @@ class Config:
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
     OPENAI_ORG_ID: Optional[str] = os.getenv("OPENAI_ORG_ID")
     OPENAI_MODEL_ID: str = os.getenv("OPENAI_MODEL_ID", "gpt-4-turbo")
+
+    AZURE_OPENAI_ENDPOINT: Optional[str] = os.getenv("AZURE_OPENAI_ENDPOINT")
+    AZURE_OPENAI_API_KEY: Optional[str] = os.getenv("AZURE_OPENAI_API_KEY")
+    AZURE_OPENAI_DEPLOYMENT_NAME: Optional[str] = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+    AZURE_OPENAI_API_VERSION: str = os.getenv("AZURE_OPENAI_API_VERSION", "2023-05-15")
     
     # Secret storage (mocked for now, implies OS keychain integration in real app)
     SECRETS = {

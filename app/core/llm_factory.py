@@ -1,5 +1,5 @@
 from semantic_kernel import Kernel
-from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion
+from semantic_kernel.connectors.ai.open_ai import OpenAIChatCompletion, AzureChatCompletion
 import openai
 # Note: Semantic Kernel's Ollama support might be via OpenAI compatible interface or specific connector depending on version.
 # For this implementation, we will use the OpenAI connector pointing to Ollama as it is a common pattern for "local-first" compatibility.
@@ -45,6 +45,21 @@ class LLMFactory:
                 )
             )
             print(f"Kernel initialized with OpenAI ({Config.OPENAI_MODEL_ID})")
+
+        elif Config.LLM_PROVIDER == "azure":
+            if not Config.AZURE_OPENAI_ENDPOINT or not Config.AZURE_OPENAI_API_KEY or not Config.AZURE_OPENAI_DEPLOYMENT_NAME:
+                raise ValueError("AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, and AZURE_OPENAI_DEPLOYMENT_NAME are required for azure provider")
+            
+            kernel.add_service(
+                AzureChatCompletion(
+                    service_id=service_id,
+                    deployment_name=Config.AZURE_OPENAI_DEPLOYMENT_NAME,
+                    endpoint=Config.AZURE_OPENAI_ENDPOINT,
+                    api_key=Config.AZURE_OPENAI_API_KEY,
+                    api_version=Config.AZURE_OPENAI_API_VERSION
+                )
+            )
+            print(f"Kernel initialized with Azure OpenAI ({Config.AZURE_OPENAI_DEPLOYMENT_NAME})")
         
         else:
             raise ValueError(f"Unsupported LLM_PROVIDER: {Config.LLM_PROVIDER}")
