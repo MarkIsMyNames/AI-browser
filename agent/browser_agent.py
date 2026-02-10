@@ -40,13 +40,15 @@ class BrowserAgent:
 
         # Choose browser plugin based on mode
         if use_mcp:
-            self.browser_plugin = PlaywrightMCPPlugin()
+            self.browser_plugin = PlaywrightMCPPlugin(headless=headless)
             plugin_name = "playwright_mcp"
-            print("[Browser Agent] Using Playwright MCP Server (enhanced mode)")
+            mode_desc = "headless" if headless else "headed (visible)"
+            print(f"[Browser Agent] Using Playwright MCP Server (enhanced mode, {mode_desc})")
         else:
             self.browser_plugin = BrowserPlugin(headless=headless)
             plugin_name = "browser"
-            print("[Browser Agent] Using direct Playwright integration (basic mode)")
+            mode_desc = "headless" if headless else "headed (visible)"
+            print(f"[Browser Agent] Using direct Playwright integration (basic mode, {mode_desc})")
 
         # Add Azure OpenAI Chat Completion service
         self.kernel.add_service(

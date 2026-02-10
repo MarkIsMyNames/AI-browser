@@ -94,7 +94,7 @@ Examples:
     parser.add_argument(
         "--headless",
         action="store_true",
-        help="Run browser in headless mode (no visible window, only for non-MCP mode)"
+        help="Run browser in headless mode (no visible window)"
     )
 
     parser.add_argument(

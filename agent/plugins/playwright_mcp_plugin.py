@@ -9,24 +9,33 @@ from mcp.client.stdio import stdio_client
 class PlaywrightMCPPlugin:
     """Plugin that provides browser automation via Playwright MCP server."""
 
-    def __init__(self):
-        """Initialize the Playwright MCP plugin."""
+    def __init__(self, headless: bool = False):
+        """Initialize the Playwright MCP plugin.
+
+        Args:
+            headless: Whether to run browser in headless mode (default: False = visible browser)
+        """
         self.session: Optional[ClientSession] = None
         self.read_stream = None
         self.write_stream = None
         self._stdio_context = None
         self._initialized = False
         self._available_tools: List[Dict[str, Any]] = []
+        self.headless = headless
 
     async def initialize(self):
         """Initialize connection to Playwright MCP server."""
         if not self._initialized:
             # Start the MCP server as a subprocess
             # Use firefox (or change to "chromium" or "webkit" as preferred)
-            # Omitting --headless flag makes the browser visible (headed mode)
+            # Build args based on headless mode
+            mcp_args = ["-y", "@playwright/mcp@latest", "--browser", "firefox"]
+            if self.headless:
+                mcp_args.append("--headless")
+
             server_params = StdioServerParameters(
                 command="npx",
-                args=["-y", "@playwright/mcp@latest", "--browser", "firefox"],
+                args=mcp_args,
                 env=None
             )
 
