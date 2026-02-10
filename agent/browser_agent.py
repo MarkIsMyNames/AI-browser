@@ -104,17 +104,14 @@ Advanced Features:
 
 Strategy:
 1. Always start by navigating to a relevant website
-2. IMPORTANT: Wait briefly and then dismiss cookie consent banners
-   - After navigation, use browser_wait_for with condition='time' and timeout=2000 (wait 2 seconds for page to load)
-   - Then use browser_dismiss_cookie_consent function (works automatically with Google, Bing, etc.)
-   - If that reports "No visible cookie consent button found", try manual clicking with browser_snapshot to find buttons
-   - Cookie banners block interaction with main page content
-   - ALWAYS handle cookie consent FIRST before other interactions
-3. Use browser_snapshot to understand page structure (more reliable than visual inspection)
-4. Take actions step by step using ARIA roles and semantic selectors when possible
-5. Use browser_take_screenshot if you need to visually inspect something
-6. Use browser_console_messages or browser_network_requests for debugging
-7. Continue until the user's goal is achieved
+   - For web searches: ALWAYS use DuckDuckGo (https://duckduckgo.com) - it has no cookie consent dialogs
+   - DuckDuckGo search URL format: https://duckduckgo.com/?q=your+search+query
+   - Example: https://duckduckgo.com/?q=playwright+tutorial
+2. Use browser_snapshot to understand page structure (more reliable than visual inspection)
+3. Take actions step by step using ARIA roles and semantic selectors when possible
+4. Use browser_take_screenshot if you need to visually inspect something
+5. Use browser_console_messages or browser_network_requests for debugging
+6. Continue until the user's goal is achieved
 
 Cookie Consent Handling Tips:
 - Google often shows "Before you continue to Google" with "Accept all" or "Reject all" buttons
@@ -148,20 +145,13 @@ You have access to browser control functions:
 
 Strategy:
 1. Always start by navigating to a relevant website
-2. IMPORTANT: Immediately check for cookie consent banners/dialogs after navigation
-   - Look for buttons with text: "Accept", "Accept all", "I agree", "Consent", "OK"
-   - Use click_element with the visible button text (e.g., click_element with text "Accept all")
-   - Cookie banners block interaction with the main page content
-   - ALWAYS handle cookie consent FIRST before other interactions
-3. Use get_page_state to understand what's on the page
-4. Take actions step by step (click, fill forms, etc.)
-5. After each action, check the page state again
-6. Continue until the user's goal is achieved
-
-Cookie Consent Tips:
-- Google shows "Accept all" or "Reject all" buttons
-- Bing/Microsoft shows "Accept" button
-- If you see these buttons in page_state, click them immediately before proceeding
+   - For web searches: ALWAYS use DuckDuckGo (https://duckduckgo.com) - it has no cookie consent dialogs
+   - DuckDuckGo search URL format: https://duckduckgo.com/?q=your+search+query
+   - Example: https://duckduckgo.com/?q=playwright+tutorial
+2. Use get_page_state to understand what's on the page
+3. Take actions step by step (click, fill forms, etc.)
+4. After each action, check the page state again
+5. Continue until the user's goal is achieved
 
 Be methodical and explain what you're doing. If you encounter issues, describe them clearly.
 If you need more information from the user, ask for it.
