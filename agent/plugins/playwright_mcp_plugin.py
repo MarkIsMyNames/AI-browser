@@ -30,13 +30,25 @@ class PlaywrightMCPPlugin:
             # Use firefox (or change to "chromium" or "webkit" as preferred)
             # Build args based on headless mode
             mcp_args = ["-y", "@playwright/mcp@latest", "--browser", "firefox"]
+            # MCP defaults to headed (visible browser), only add --headless flag if requested
             if self.headless:
                 mcp_args.append("--headless")
+
+            # Debug: print the command being executed
+            print(f"[DEBUG] Starting MCP server with command: npx {' '.join(mcp_args)}")
+            print(f"[DEBUG] Headless mode: {self.headless}")
+
+            # Add environment variables to ensure display works
+            import os
+            env = os.environ.copy()
+            # Ensure DISPLAY is set for X11
+            if 'DISPLAY' not in env:
+                env['DISPLAY'] = ':0'
 
             server_params = StdioServerParameters(
                 command="npx",
                 args=mcp_args,
-                env=None
+                env=env
             )
 
             # Create stdio client connection (it's a context manager)
@@ -85,8 +97,10 @@ class PlaywrightMCPPlugin:
         """
         await self.initialize()
 
+        print(f"[DEBUG] Calling MCP tool: {tool_name} with args: {arguments}")
         try:
             result = await self.session.call_tool(tool_name, arguments=arguments)
+            print(f"[DEBUG] Tool {tool_name} completed successfully")
 
             # Extract content from result
             if hasattr(result, 'content') and result.content:
@@ -100,30 +114,32 @@ class PlaywrightMCPPlugin:
 
             return str(result)
         except Exception as e:
-            return f"Error calling {tool_name}: {str(e)}"
+            error_msg = f"Error calling {tool_name}: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
+            return error_msg
 
     @kernel_function(
         name="browser_navigate",
-        description="Navigate to a URL in the browser"
+        description="Navigate to URL"
     )
     async def navigate(
         self,
-        url: Annotated[str, "The URL to navigate to"]
-    ) -> Annotated[str, "The result of the navigation"]:
+        url: Annotated[str, "URL"]
+    ) -> str:
         """Navigate to a URL."""
         return await self._call_tool("browser_navigate", {"url": url})
 
     @kernel_function(
         name="browser_take_screenshot",
-        description="Take a screenshot of the current page or a specific element"
+        description="Take screenshot"
     )
     async def screenshot(
         self,
-        name: Annotated[str, "Name for the screenshot"],
-        selector: Annotated[str, "CSS selector for element to screenshot (optional, leave empty for full page)"] = "",
-        width: Annotated[int, "Screenshot width"] = 800,
-        height: Annotated[int, "Screenshot height"] = 600
-    ) -> Annotated[str, "The result of taking the screenshot"]:
+        name: Annotated[str, "Name"],
+        selector: Annotated[str, "Selector (optional)"] = "",
+        width: Annotated[int, "Width"] = 800,
+        height: Annotated[int, "Height"] = 600
+    ) -> str:
         """Take a screenshot."""
         args = {"name": name, "width": width, "height": height}
         if selector:
@@ -132,35 +148,35 @@ class PlaywrightMCPPlugin:
 
     @kernel_function(
         name="browser_click",
-        description="Click on an element on the page"
+        description="Click element"
     )
     async def click(
         self,
-        selector: Annotated[str, "CSS selector or ARIA role of the element to click"]
-    ) -> Annotated[str, "The result of the click action"]:
+        selector: Annotated[str, "Selector"]
+    ) -> str:
         """Click an element."""
         return await self._call_tool("browser_click", {"selector": selector})
 
     @kernel_function(
         name="browser_type",
-        description="Type text into an editable element"
+        description="Type text"
     )
     async def type_text(
         self,
-        selector: Annotated[str, "CSS selector or ARIA role of the input field"],
-        text: Annotated[str, "The text to type"]
-    ) -> Annotated[str, "The result of the type action"]:
+        selector: Annotated[str, "Selector"],
+        text: Annotated[str, "Text"]
+    ) -> str:
         """Type text into a field."""
         return await self._call_tool("browser_type", {"selector": selector, "text": text})
 
     @kernel_function(
         name="browser_fill_form",
-        description="Fill multiple form fields at once"
+        description="Fill form fields"
     )
     async def fill_form(
         self,
-        fields: Annotated[str, "JSON object mapping selectors to values, e.g. {'#email': 'test@example.com', '#password': 'pass123'}"]
-    ) -> Annotated[str, "The result of filling the form"]:
+        fields: Annotated[str, "JSON selector map"]
+    ) -> str:
         """Fill multiple form fields."""
         import json
         try:
@@ -171,83 +187,83 @@ class PlaywrightMCPPlugin:
 
     @kernel_function(
         name="browser_select_option",
-        description="Select an option from a dropdown"
+        description="Select dropdown option"
     )
     async def select(
         self,
-        selector: Annotated[str, "CSS selector for the select element"],
-        value: Annotated[str, "The value to select"]
-    ) -> Annotated[str, "The result of the select action"]:
+        selector: Annotated[str, "Selector"],
+        value: Annotated[str, "Value"]
+    ) -> str:
         """Select a dropdown option."""
         return await self._call_tool("browser_select_option", {"selector": selector, "value": value})
 
     @kernel_function(
         name="browser_hover",
-        description="Hover over an element"
+        description="Hover over element"
     )
     async def hover(
         self,
-        selector: Annotated[str, "CSS selector or ARIA role of the element to hover over"]
-    ) -> Annotated[str, "The result of the hover action"]:
+        selector: Annotated[str, "Selector"]
+    ) -> str:
         """Hover over an element."""
         return await self._call_tool("browser_hover", {"selector": selector})
 
     @kernel_function(
         name="browser_evaluate",
-        description="Execute JavaScript code in the browser context"
+        description="Execute JavaScript"
     )
     async def evaluate(
         self,
-        script: Annotated[str, "JavaScript code to execute"]
-    ) -> Annotated[str, "The result of the JavaScript execution"]:
+        script: Annotated[str, "JS code"]
+    ) -> str:
         """Execute JavaScript."""
         return await self._call_tool("browser_evaluate", {"expression": script})
 
     @kernel_function(
         name="browser_snapshot",
-        description="Get the accessibility tree snapshot of the current page (structured DOM information)"
+        description="Get page accessibility tree"
     )
-    async def get_snapshot(self) -> Annotated[str, "The accessibility tree snapshot"]:
+    async def get_snapshot(self) -> str:
         """Get accessibility snapshot of the page."""
         return await self._call_tool("browser_snapshot", {})
 
     @kernel_function(
         name="browser_close",
-        description="Close the current browser page/tab"
+        description="Close page"
     )
-    async def close(self) -> Annotated[str, "The result of closing the page"]:
+    async def close(self) -> str:
         """Close the browser page."""
         return await self._call_tool("browser_close", {})
 
     @kernel_function(
         name="browser_resize",
-        description="Resize the browser window to specified dimensions"
+        description="Resize window"
     )
     async def resize(
         self,
-        width: Annotated[int, "Window width in pixels"],
-        height: Annotated[int, "Window height in pixels"]
-    ) -> Annotated[str, "The result of resizing the browser"]:
+        width: Annotated[int, "Width px"],
+        height: Annotated[int, "Height px"]
+    ) -> str:
         """Resize the browser window."""
         return await self._call_tool("browser_resize", {"width": width, "height": height})
 
     @kernel_function(
         name="browser_console_messages",
-        description="Get all console messages from the browser"
+        description="Get console messages"
     )
-    async def console_messages(self) -> Annotated[str, "All console messages"]:
+    async def console_messages(self) -> str:
         """Get console messages."""
         return await self._call_tool("browser_console_messages", {})
 
     @kernel_function(
         name="browser_handle_dialog",
-        description="Handle a browser dialog (alert, confirm, prompt)"
+        description="Handle dialog"
     )
     async def handle_dialog(
         self,
-        action: Annotated[str, "Action to take: 'accept' or 'dismiss'"],
-        prompt_text: Annotated[str, "Text to enter in prompt dialog (optional)"] = ""
-    ) -> Annotated[str, "The result of handling the dialog"]:
+        action: Annotated[str, "accept/dismiss"],
+        prompt_text: Annotated[str, "Text (optional)"] = ""
+    ) -> str:
         """Handle a browser dialog."""
         args = {"action": action}
         if prompt_text:
@@ -256,76 +272,76 @@ class PlaywrightMCPPlugin:
 
     @kernel_function(
         name="browser_file_upload",
-        description="Upload one or multiple files to a file input"
+        description="Upload files"
     )
     async def file_upload(
         self,
-        selector: Annotated[str, "CSS selector for the file input element"],
-        file_paths: Annotated[str, "Comma-separated list of file paths to upload"]
-    ) -> Annotated[str, "The result of the file upload"]:
+        selector: Annotated[str, "Selector"],
+        file_paths: Annotated[str, "Paths (comma-sep)"]
+    ) -> str:
         """Upload files to a file input."""
         paths = [p.strip() for p in file_paths.split(",")]
         return await self._call_tool("browser_file_upload", {"selector": selector, "filePaths": paths})
 
     @kernel_function(
         name="browser_press_key",
-        description="Press a keyboard key"
+        description="Press key"
     )
     async def press_key(
         self,
-        key: Annotated[str, "The key to press (e.g., 'Enter', 'Escape', 'Tab', 'ArrowDown')"]
-    ) -> Annotated[str, "The result of pressing the key"]:
+        key: Annotated[str, "Key name"]
+    ) -> str:
         """Press a keyboard key."""
         return await self._call_tool("browser_press_key", {"key": key})
 
     @kernel_function(
         name="browser_navigate_back",
-        description="Navigate back to the previous page in browser history"
+        description="Navigate back"
     )
-    async def navigate_back(self) -> Annotated[str, "The result of navigating back"]:
+    async def navigate_back(self) -> str:
         """Navigate back in browser history."""
         return await self._call_tool("browser_navigate_back", {})
 
     @kernel_function(
         name="browser_network_requests",
-        description="Get all network requests made since page load"
+        description="Get network requests"
     )
-    async def network_requests(self) -> Annotated[str, "All network requests"]:
+    async def network_requests(self) -> str:
         """Get network requests."""
         return await self._call_tool("browser_network_requests", {})
 
     @kernel_function(
         name="browser_run_code",
-        description="Run a Playwright code snippet directly"
+        description="Run Playwright code"
     )
     async def run_code(
         self,
-        code: Annotated[str, "Playwright code snippet to execute"]
-    ) -> Annotated[str, "The result of running the code"]:
+        code: Annotated[str, "Code snippet"]
+    ) -> str:
         """Run Playwright code snippet."""
         return await self._call_tool("browser_run_code", {"code": code})
 
     @kernel_function(
         name="browser_drag",
-        description="Perform drag and drop operation between two elements"
+        description="Drag and drop"
     )
     async def drag(
         self,
-        source: Annotated[str, "CSS selector of the element to drag"],
-        target: Annotated[str, "CSS selector of the drop target"]
-    ) -> Annotated[str, "The result of the drag operation"]:
+        source: Annotated[str, "Source selector"],
+        target: Annotated[str, "Target selector"]
+    ) -> str:
         """Drag and drop an element."""
         return await self._call_tool("browser_drag", {"source": source, "target": target})
 
     @kernel_function(
         name="browser_tabs",
-        description="Manage browser tabs (list, create, close, or select)"
+        description="Manage tabs"
     )
     async def tabs(
         self,
-        action: Annotated[str, "Action to perform: 'list', 'create', 'close', or 'select'"],
-        tab_id: Annotated[str, "Tab ID for close or select actions (optional)"] = ""
-    ) -> Annotated[str, "The result of the tabs operation"]:
+        action: Annotated[str, "list/create/close/select"],
+        tab_id: Annotated[str, "Tab ID (optional)"] = ""
+    ) -> str:
         """Manage browser tabs."""
         args = {"action": action}
         if tab_id:
@@ -334,14 +350,14 @@ class PlaywrightMCPPlugin:
 
     @kernel_function(
         name="browser_wait_for",
-        description="Wait for text to appear, disappear, or for a specified time"
+        description="Wait for condition"
     )
     async def wait_for(
         self,
-        condition: Annotated[str, "What to wait for: 'text_appear', 'text_disappear', or 'time'"],
-        text: Annotated[str, "Text to wait for (if condition is text_appear or text_disappear)"] = "",
-        timeout: Annotated[int, "Timeout in milliseconds"] = 5000
-    ) -> Annotated[str, "The result of the wait operation"]:
+        condition: Annotated[str, "Condition type"],
+        text: Annotated[str, "Text (optional)"] = "",
+        timeout: Annotated[int, "Timeout ms"] = 5000
+    ) -> str:
         """Wait for a condition."""
         args = {"condition": condition, "timeout": timeout}
         if text:
@@ -350,17 +366,17 @@ class PlaywrightMCPPlugin:
 
     @kernel_function(
         name="browser_install",
-        description="Install the browser specified in config (call if browser not installed error occurs)"
+        description="Install browser"
     )
-    async def install_browser(self) -> Annotated[str, "The result of installing the browser"]:
+    async def install_browser(self) -> str:
         """Install the browser."""
         return await self._call_tool("browser_install", {})
 
     @kernel_function(
         name="browser_dismiss_cookie_consent",
-        description="Automatically detect and dismiss common cookie consent banners by clicking Accept/Agree buttons. Works with Google, Bing, and most cookie dialogs."
+        description="Dismiss cookie consent"
     )
-    async def dismiss_cookie_consent(self) -> Annotated[str, "The result of dismissing cookie consent"]:
+    async def dismiss_cookie_consent(self) -> str:
         """Automatically dismiss cookie consent banners using Playwright selectors and JavaScript."""
 
         # Strategy 1: Try browser_click with Playwright text selectors

@@ -69,95 +69,26 @@ class BrowserAgent:
 
         # System prompt for the agent (varies based on MCP usage)
         if use_mcp:
-            self.system_prompt = """You are a browser automation agent powered by Playwright MCP. Your goal is to help users complete tasks on the web by controlling a browser.
-
-You have access to comprehensive browser control functions:
-
-Navigation & Page Management:
-- browser_navigate: Navigate to a specific URL
-- browser_navigate_back: Go back in browser history
-- browser_tabs: List, create, close, or select browser tabs
-- browser_close: Close the current page/tab
-
-Page Inspection & Analysis:
-- browser_snapshot: Get structured accessibility tree (best for understanding page structure)
-- browser_take_screenshot: Take screenshots of page or specific elements
-- browser_console_messages: Get all console messages
-- browser_network_requests: Get all network requests since page load
-
-User Interactions:
-- browser_click: Click elements (supports CSS selectors and ARIA roles)
-- browser_type: Type text into editable elements
-- browser_fill_form: Fill multiple form fields at once
-- browser_select_option: Select dropdown options
-- browser_hover: Hover over elements
-- browser_drag: Perform drag and drop operations
-- browser_press_key: Press keyboard keys (Enter, Tab, Escape, etc.)
-- browser_file_upload: Upload files to file inputs
-
-Advanced Features:
-- browser_evaluate: Execute JavaScript in browser context
-- browser_run_code: Run Playwright code snippets directly
-- browser_handle_dialog: Handle alerts, confirms, and prompts
-- browser_resize: Resize the browser window
-- browser_wait_for: Wait for text to appear/disappear or specific time
-- browser_install: Install browser if not already installed
-- browser_dismiss_cookie_consent: RECOMMENDED - Automatically detect and dismiss cookie consent banners
+            self.system_prompt = """You are a browser automation agent. Help users complete web tasks by controlling a browser.
 
 Strategy:
-1. Always start by navigating to a relevant website
-   - For web searches: ALWAYS use DuckDuckGo (https://duckduckgo.com) - it has no cookie consent dialogs
-   - DuckDuckGo search URL format: https://duckduckgo.com/?q=your+search+query
-   - Example: https://duckduckgo.com/?q=playwright+tutorial
-2. Use browser_snapshot to understand page structure (more reliable than visual inspection)
-3. Take actions step by step using ARIA roles and semantic selectors when possible
-4. Use browser_take_screenshot if you need to visually inspect something
-5. Use browser_console_messages or browser_network_requests for debugging
-6. Continue until the user's goal is achieved
+1. Navigate to relevant sites (for searches use DuckDuckGo: https://duckduckgo.com/?q=query)
+2. Use browser_snapshot to understand page structure
+3. Interact using browser_click, browser_type, etc.
+4. Use browser_dismiss_cookie_consent for cookie banners
+5. Continue until goal achieved
 
-Cookie Consent Handling Tips:
-- Google often shows "Before you continue to Google" with "Accept all" or "Reject all" buttons
-- Bing/Microsoft shows cookie consent with "Accept" button
-- DuckDuckGo typically doesn't have cookie consent dialogs
-
-Fallback if browser_dismiss_cookie_consent doesn't work:
-1. Use browser_snapshot to see the page structure
-2. Look for buttons containing "Accept", "I agree", "Consent" in the snapshot
-3. Use browser_click with a specific selector like: button#L2AGLb (Google's Accept All button)
-4. Or use text-based clicking if you see the button text in the snapshot
-5. If all else fails, try a different search engine (e.g., DuckDuckGo has no cookie dialogs)
-
-The MCP server provides deterministic, structured access to the page. Prefer using ARIA roles and semantic selectors over generic CSS selectors.
-
-Be methodical and explain what you're doing. If you encounter issues, describe them clearly.
-If you need more information from the user, ask for it.
-"""
+Be methodical and explain your actions."""
         else:
-            self.system_prompt = """You are a browser automation agent. Your goal is to help users complete tasks on the web by controlling a browser.
-
-You have access to browser control functions:
-- navigate_to_url: Navigate to a specific URL
-- get_page_state: Get current page state (URL, title, buttons, links, inputs)
-- get_page_content: Get text content from the page
-- click_element: Click an element (by CSS selector or visible text)
-- fill_input: Fill an input field (by CSS selector)
-- type_text: Type text character by character
-- press_key: Press a keyboard key (e.g., 'Enter')
-- wait_for_navigation: Wait for page to load
+            self.system_prompt = """You are a browser automation agent. Help users complete web tasks by controlling a browser.
 
 Strategy:
-1. Always start by navigating to a relevant website
-   - For web searches: ALWAYS use DuckDuckGo (https://duckduckgo.com) - it has no cookie consent dialogs
-   - DuckDuckGo search URL format: https://duckduckgo.com/?q=your+search+query
-   - Example: https://duckduckgo.com/?q=playwright+tutorial
-2. Use get_page_state to understand what's on the page
+1. Navigate to relevant sites (for searches use DuckDuckGo: https://duckduckgo.com/?q=query)
+2. Use get_page_state to understand page structure
 3. Take actions step by step (click, fill forms, etc.)
-4. After each action, check the page state again
-5. Continue until the user's goal is achieved
+4. Continue until goal achieved
 
-Be methodical and explain what you're doing. If you encounter issues, describe them clearly.
-If you need more information from the user, ask for it.
-"""
+Be methodical and explain your actions."""
 
     async def run(self, user_goal: str, max_iterations: int = 15) -> str:
         """Run the agent to accomplish a user goal.
@@ -208,6 +139,15 @@ If you need more information from the user, ask for it.
 
                 # Get the first response
                 message = response[0]
+
+                # Debug: Check what items are in the message
+                if hasattr(message, 'items') and message.items:
+                    print(f"[DEBUG] Message has {len(message.items)} items")
+                    for idx, item in enumerate(message.items):
+                        item_type = type(item).__name__
+                        print(f"[DEBUG] Item {idx}: {item_type}")
+                        if hasattr(item, 'function_name'):
+                            print(f"[DEBUG]   -> Function: {item.function_name}")
 
                 # Add assistant's response to chat history
                 self.chat_history.add_assistant_message(str(message))
