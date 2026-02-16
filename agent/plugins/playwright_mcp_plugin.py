@@ -34,10 +34,6 @@ class PlaywrightMCPPlugin:
             if self.headless:
                 mcp_args.append("--headless")
 
-            # Debug: print the command being executed
-            print(f"[DEBUG] Starting MCP server with command: npx {' '.join(mcp_args)}")
-            print(f"[DEBUG] Headless mode: {self.headless}")
-
             # Add environment variables to ensure display works
             import os
             env = os.environ.copy()
@@ -97,10 +93,8 @@ class PlaywrightMCPPlugin:
         """
         await self.initialize()
 
-        print(f"[DEBUG] Calling MCP tool: {tool_name} with args: {arguments}")
         try:
             result = await self.session.call_tool(tool_name, arguments=arguments)
-            print(f"[DEBUG] Tool {tool_name} completed successfully")
 
             # Extract content from result
             if hasattr(result, 'content') and result.content:
@@ -110,12 +104,12 @@ class PlaywrightMCPPlugin:
                         content_parts.append(item.text)
                     elif hasattr(item, 'data'):
                         content_parts.append(str(item.data))
+
                 return "\n".join(content_parts) if content_parts else "Success"
 
             return str(result)
         except Exception as e:
             error_msg = f"Error calling {tool_name}: {str(e)}"
-            print(f"[DEBUG] {error_msg}")
             return error_msg
 
     @kernel_function(
@@ -148,14 +142,18 @@ class PlaywrightMCPPlugin:
 
     @kernel_function(
         name="browser_click",
-        description="Click element"
+        description="Click element by ref"
     )
     async def click(
         self,
-        selector: Annotated[str, "Selector"]
+        ref: Annotated[str, "Element ref from snapshot"],
+        element: Annotated[str, "Element description"] = ""
     ) -> str:
-        """Click an element."""
-        return await self._call_tool("browser_click", {"selector": selector})
+        """Click an element using its ref from browser_snapshot."""
+        args = {"ref": ref}
+        if element:
+            args["element"] = element
+        return await self._call_tool("browser_click", args)
 
     @kernel_function(
         name="browser_type",
@@ -163,11 +161,15 @@ class PlaywrightMCPPlugin:
     )
     async def type_text(
         self,
-        selector: Annotated[str, "Selector"],
-        text: Annotated[str, "Text"]
+        ref: Annotated[str, "Element ref from snapshot"],
+        text: Annotated[str, "Text to type"],
+        element: Annotated[str, "Element description"] = ""
     ) -> str:
-        """Type text into a field."""
-        return await self._call_tool("browser_type", {"selector": selector, "text": text})
+        """Type text into a field using its ref from browser_snapshot."""
+        args = {"ref": ref, "text": text}
+        if element:
+            args["element"] = element
+        return await self._call_tool("browser_type", args)
 
     @kernel_function(
         name="browser_fill_form",
@@ -191,11 +193,15 @@ class PlaywrightMCPPlugin:
     )
     async def select(
         self,
-        selector: Annotated[str, "Selector"],
-        value: Annotated[str, "Value"]
+        ref: Annotated[str, "Element ref from snapshot"],
+        values: Annotated[str, "Values to select"],
+        element: Annotated[str, "Element description"] = ""
     ) -> str:
-        """Select a dropdown option."""
-        return await self._call_tool("browser_select_option", {"selector": selector, "value": value})
+        """Select dropdown options using ref from browser_snapshot."""
+        args = {"ref": ref, "values": [values]}  # MCP expects array
+        if element:
+            args["element"] = element
+        return await self._call_tool("browser_select_option", args)
 
     @kernel_function(
         name="browser_hover",
@@ -203,10 +209,14 @@ class PlaywrightMCPPlugin:
     )
     async def hover(
         self,
-        selector: Annotated[str, "Selector"]
+        ref: Annotated[str, "Element ref from snapshot"],
+        element: Annotated[str, "Element description"] = ""
     ) -> str:
-        """Hover over an element."""
-        return await self._call_tool("browser_hover", {"selector": selector})
+        """Hover over an element using its ref from browser_snapshot."""
+        args = {"ref": ref}
+        if element:
+            args["element"] = element
+        return await self._call_tool("browser_hover", args)
 
     @kernel_function(
         name="browser_evaluate",

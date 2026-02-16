@@ -71,12 +71,31 @@ class BrowserAgent:
         if use_mcp:
             self.system_prompt = """You are a browser automation agent. Help users complete web tasks by controlling a browser.
 
+CRITICAL - Snapshot Workflow:
+- ALWAYS call browser_snapshot BEFORE interacting with ANY elements
+- ALWAYS call browser_snapshot AGAIN after navigation/page changes
+- Refs (e45, e123, etc.) are only valid for the current snapshot
+- Refs become INVALID after navigating to a new page
+
+How to use snapshots:
+1. Navigate: browser_navigate(url="...")
+2. Snapshot: browser_snapshot() → Returns elements like: link "Home" [ref=e7]
+3. Extract ref: Find the element you need and note its ref (e.g., e7)
+4. Interact: browser_click(ref="e7", element="Home link")
+5. After any navigation/click that changes the page → GO BACK TO STEP 2
+
+Example workflow:
+- Navigate to search page → snapshot → click result link (ref=e45)
+- NEW PAGE LOADED → snapshot again → click button (ref=e12 from new snapshot)
+- ANOTHER PAGE → snapshot again → etc.
+
+Never reuse refs from an old snapshot after the page has changed!
+
 Strategy:
-1. Navigate to relevant sites (for searches use DuckDuckGo: https://duckduckgo.com/?q=query)
-2. Use browser_snapshot to understand page structure
-3. Interact using browser_click, browser_type, etc.
-4. Use browser_dismiss_cookie_consent for cookie banners
-5. Continue until goal achieved
+1. Navigate to DuckDuckGo: https://duckduckgo.com/?q=query
+2. Get snapshot, find link, click using ref
+3. After navigation: Get NEW snapshot for new page
+4. Continue until goal achieved
 
 Be methodical and explain your actions."""
         else:
@@ -140,14 +159,13 @@ Be methodical and explain your actions."""
                 # Get the first response
                 message = response[0]
 
-                # Debug: Check what items are in the message
+                # Check if there were any function calls in this iteration
+                has_function_calls = False
                 if hasattr(message, 'items') and message.items:
-                    print(f"[DEBUG] Message has {len(message.items)} items")
-                    for idx, item in enumerate(message.items):
-                        item_type = type(item).__name__
-                        print(f"[DEBUG] Item {idx}: {item_type}")
-                        if hasattr(item, 'function_name'):
-                            print(f"[DEBUG]   -> Function: {item.function_name}")
+                    for item in message.items:
+                        if hasattr(item, 'function_name') or type(item).__name__ == 'FunctionCallContent':
+                            has_function_calls = True
+                            break
 
                 # Add assistant's response to chat history
                 self.chat_history.add_assistant_message(str(message))
@@ -156,14 +174,28 @@ Be methodical and explain your actions."""
                 if message.content:
                     print(f"\n[Agent]: {message.content}")
 
-                # Check if there were function calls
-                if hasattr(message, 'function_call') and message.function_call:
-                    print(f"[Function Call]: {message.function_call.name}")
+                # If no function calls and has content, agent likely thinks it's done
+                if not has_function_calls and message.content:
+                    print("\n[Agent appears to have completed the task]")
 
-                # Check if agent thinks it's done (no more function calls and has content)
-                if message.content and "done" in message.content.lower():
-                    print("\n[Agent indicates task completion]")
-                    break
+                    # Ask user if they're satisfied
+                    try:
+                        user_response = input("\nAre you satisfied with this result? (yes/no/feedback): ").strip().lower()
+
+                        if user_response in ['yes', 'y']:
+                            print("[Task completed successfully]")
+                            break
+                        elif user_response in ['no', 'n']:
+                            feedback = input("What would you like me to change or fix? ")
+                            self.chat_history.add_user_message(f"Please continue. User feedback: {feedback}")
+                            print("\n[Continuing with user feedback...]")
+                        else:
+                            # Treat anything else as feedback
+                            self.chat_history.add_user_message(f"Please continue. User feedback: {user_response}")
+                            print("\n[Continuing with user feedback...]")
+                    except (EOFError, KeyboardInterrupt):
+                        print("\n[No user input - assuming task complete]")
+                        break
 
                 # Small delay to make output readable
                 await asyncio.sleep(0.5)
