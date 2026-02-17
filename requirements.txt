@@ -4,3 +4,4 @@ pytest
 nest_asyncio
 python-dotenv
 openai
+PySide6
