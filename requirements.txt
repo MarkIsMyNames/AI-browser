@@ -8,3 +8,4 @@ openai
 azure-identity
 mcp>=0.9.0
 httpx>=0.27.0
+PySide6
