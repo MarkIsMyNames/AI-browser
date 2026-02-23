@@ -11,6 +11,7 @@ from semantic_kernel.functions import KernelArguments
 
 from agent.plugins.browser_plugin import BrowserPlugin
 from agent.plugins.playwright_mcp_plugin import PlaywrightMCPPlugin
+from agent.pii_scrubber import scrub
 
 MAX_HISTORY = 20
 
@@ -138,7 +139,7 @@ Be methodical and explain your actions."""
 
         # Initialize chat history with system prompt
         self.chat_history.add_system_message(self.system_prompt)
-        self.chat_history.add_user_message(user_goal)
+        self.chat_history.add_user_message(scrub(user_goal))
 
         # Get the chat completion service
         chat_completion: ChatCompletionClientBase = self.kernel.get_service(
@@ -205,7 +206,7 @@ Be methodical and explain your actions."""
                         self.browser_plugin.help_requested = False
                         self.browser_plugin.help_question = ""
                         if user_input:
-                            self.chat_history.add_user_message(user_input)
+                            self.chat_history.add_user_message(scrub(user_input))
                         else:
                             self.chat_history.add_user_message("Continue and try a different approach.")
                     except (EOFError, KeyboardInterrupt):
@@ -232,12 +233,16 @@ Be methodical and explain your actions."""
                             feedback = await asyncio.to_thread(input, "What would you like me to change or fix? ")
                             self.browser_plugin.task_completed = False
                             self.browser_plugin.task_summary = ""
-                            self.chat_history.add_user_message(f"Please continue. User feedback: {feedback}")
+                            self.chat_history.add_user_message(
+                                f"Please continue. User feedback: {scrub(feedback)}"
+                            )
                             print("\n[Continuing with user feedback...]")
                         else:
                             self.browser_plugin.task_completed = False
                             self.browser_plugin.task_summary = ""
-                            self.chat_history.add_user_message(f"Please continue. User feedback: {user_response}")
+                            self.chat_history.add_user_message(
+                                f"Please continue. User feedback: {scrub(user_response)}"
+                            )
                             print("\n[Continuing with user feedback...]")
                     except (EOFError, KeyboardInterrupt):
                         print("\n[No user input - assuming task complete]")
