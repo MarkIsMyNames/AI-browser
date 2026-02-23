@@ -6,10 +6,13 @@ from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
 from semantic_kernel.connectors.ai.chat_completion_client_base import ChatCompletionClientBase
 from semantic_kernel.contents.chat_history import ChatHistory
+from semantic_kernel.contents import AuthorRole
 from semantic_kernel.functions import KernelArguments
 
 from agent.plugins.browser_plugin import BrowserPlugin
 from agent.plugins.playwright_mcp_plugin import PlaywrightMCPPlugin
+
+MAX_HISTORY = 20
 
 
 class BrowserAgent:
@@ -74,30 +77,36 @@ class BrowserAgent:
 CRITICAL - Snapshot Workflow:
 - ALWAYS call browser_snapshot BEFORE interacting with ANY elements
 - ALWAYS call browser_snapshot AGAIN after navigation/page changes
-- Refs (e45, e123, etc.) are only valid for the current snapshot
-- Refs become INVALID after navigating to a new page
+- Refs (e45, e123, etc.) are only valid for the CURRENT snapshot only
+- Refs become INVALID the moment you navigate to a new page
 
-How to use snapshots:
-1. Navigate: browser_navigate(url="...")
-2. Snapshot: browser_snapshot() → Returns elements like: link "Home" [ref=e7]
-3. Extract ref: Find the element you need and note its ref (e.g., e7)
-4. Interact: browser_click(ref="e7", element="Home link")
-5. After any navigation/click that changes the page → GO BACK TO STEP 2
+Multi-page research strategy (use this for tasks requiring info from multiple pages):
+1. Search: browser_navigate to https://duckduckgo.com/?q=your+query
+2. Snapshot the search results page
+3. COLLECT multiple URLs from the snapshot (read the href/link text, note 5+ candidate URLs as plain text)
+4. For each URL you collected, use browser_navigate(url="https://...") directly — never navigate back or reuse old refs
+5. Snapshot the new page → extract information → move to the next collected URL
+6. Repeat until you have ALL required information
 
-Example workflow:
-- Navigate to search page → snapshot → click result link (ref=e45)
-- NEW PAGE LOADED → snapshot again → click button (ref=e12 from new snapshot)
-- ANOTHER PAGE → snapshot again → etc.
+Error recovery — if a page fails or has no useful info:
+- Move on immediately to the next URL from your list
+- If your URL list runs out, do another DuckDuckGo search with different keywords
 
-Never reuse refs from an old snapshot after the page has changed!
+Form filling rules:
+- Use browser_fill_form to fill forms. Pass a JSON object of field label → value pairs, e.g. {"Email": "john@example.com", "First Name": "John"}. Refs are resolved automatically — do NOT look up or pass refs yourself.
+- Only use browser_type directly for single fields on non-form pages where browser_fill_form is not applicable.
 
-Strategy:
-1. Navigate to DuckDuckGo: https://duckduckgo.com/?q=query
-2. Get snapshot, find link, click using ref
-3. After navigation: Get NEW snapshot for new page
-4. Continue until goal achieved
+CRITICAL RULES:
+- Count what you have. If the task requires 3 items, you must have exactly 3 before calling task_complete.
+- NEVER call task_complete with partial results. "I found 1 of 3" is NOT complete.
+- Do NOT say "I will do X" — actually do it using the tools right now.
+- Do NOT use browser_navigate_back to return to search results — you will have stale refs. Use browser_navigate with the next URL instead.
+- Make all decisions autonomously. Do NOT ask the user questions in your response text — there is nobody reading it mid-task.
+- When you face multiple options or paths, pick one yourself and act on it immediately. Never present a list of options and ask the user to choose.
+- If you are genuinely blocked after trying multiple approaches, call request_help(question="...") to pause and get user input. This is a last resort, not a first response to difficulty.
+- When you genuinely have ALL required information, call task_complete(summary="...") with the complete answer.
 
-Be methodical and explain your actions."""
+Be methodical, persistent, and thorough. One page failure is not a reason to stop."""
         else:
             self.system_prompt = """You are a browser automation agent. Help users complete web tasks by controlling a browser.
 
@@ -123,6 +132,10 @@ Be methodical and explain your actions."""
         print(f"Agent Goal: {user_goal}")
         print(f"{'='*60}\n")
 
+        # Eagerly initialize the browser/MCP server before the first LLM call
+        # so the delay is visible and upfront rather than hidden mid-run
+        await self.browser_plugin.initialize()
+
         # Initialize chat history with system prompt
         self.chat_history.add_system_message(self.system_prompt)
         self.chat_history.add_user_message(user_goal)
@@ -139,6 +152,7 @@ Be methodical and explain your actions."""
         execution_settings.function_choice_behavior = FunctionChoiceBehavior.Auto()
 
         iteration = 0
+        message = None
         try:
             while iteration < max_iterations:
                 iteration += 1
@@ -159,38 +173,70 @@ Be methodical and explain your actions."""
                 # Get the first response
                 message = response[0]
 
-                # Check if there were any function calls in this iteration
-                has_function_calls = False
-                if hasattr(message, 'items') and message.items:
-                    for item in message.items:
-                        if hasattr(item, 'function_name') or type(item).__name__ == 'FunctionCallContent':
-                            has_function_calls = True
-                            break
-
                 # Add assistant's response to chat history
                 self.chat_history.add_assistant_message(str(message))
+
+                # Sliding-window trim to prevent unbounded history growth
+                if len(self.chat_history) > MAX_HISTORY + 1:
+                    system_msg = self.chat_history[0]
+                    goal_msg = self.chat_history[1]
+                    tail = list(self.chat_history)[-(MAX_HISTORY - 2):]
+                    # Strip leading tool messages — they reference tool_calls that were
+                    # trimmed away, which the API rejects as an invalid message sequence.
+                    while tail and getattr(tail[0], 'role', None) == AuthorRole.TOOL:
+                        tail = tail[1:]
+                    self.chat_history = ChatHistory()
+                    self.chat_history.add_message(system_msg)
+                    self.chat_history.add_message(goal_msg)
+                    for msg in tail:
+                        self.chat_history.add_message(msg)
 
                 # Print the agent's reasoning
                 if message.content:
                     print(f"\n[Agent]: {message.content}")
 
-                # If no function calls and has content, agent likely thinks it's done
-                if not has_function_calls and message.content:
-                    print("\n[Agent appears to have completed the task]")
-
-                    # Ask user if they're satisfied
+                # Check if agent called request_help() — pause and get user input
+                if self.browser_plugin.help_requested:
+                    print(f"\n[Agent needs help]: {self.browser_plugin.help_question}")
                     try:
-                        user_response = input("\nAre you satisfied with this result? (yes/no/feedback): ").strip().lower()
+                        user_input = (await asyncio.to_thread(
+                            input, "\nYour response (press Enter to let the agent continue trying): "
+                        )).strip()
+                        self.browser_plugin.help_requested = False
+                        self.browser_plugin.help_question = ""
+                        if user_input:
+                            self.chat_history.add_user_message(user_input)
+                        else:
+                            self.chat_history.add_user_message("Continue and try a different approach.")
+                    except (EOFError, KeyboardInterrupt):
+                        self.browser_plugin.help_requested = False
+                        self.browser_plugin.help_question = ""
+                        self.chat_history.add_user_message("Continue and try a different approach.")
+
+                # Check if agent explicitly signalled task completion via task_complete()
+                if self.browser_plugin.task_completed:
+                    print("\n[Agent has signalled task completion]")
+                    final_summary = self.browser_plugin.task_summary
+                    if final_summary:
+                        print(f"\n[Final Answer]:\n{final_summary}")
+
+                    try:
+                        user_response = (await asyncio.to_thread(
+                            input, "\nAre you satisfied with this result? (yes/no/feedback): "
+                        )).strip().lower()
 
                         if user_response in ['yes', 'y']:
                             print("[Task completed successfully]")
                             break
                         elif user_response in ['no', 'n']:
-                            feedback = input("What would you like me to change or fix? ")
+                            feedback = await asyncio.to_thread(input, "What would you like me to change or fix? ")
+                            self.browser_plugin.task_completed = False
+                            self.browser_plugin.task_summary = ""
                             self.chat_history.add_user_message(f"Please continue. User feedback: {feedback}")
                             print("\n[Continuing with user feedback...]")
                         else:
-                            # Treat anything else as feedback
+                            self.browser_plugin.task_completed = False
+                            self.browser_plugin.task_summary = ""
                             self.chat_history.add_user_message(f"Please continue. User feedback: {user_response}")
                             print("\n[Continuing with user feedback...]")
                     except (EOFError, KeyboardInterrupt):
@@ -204,7 +250,11 @@ Be methodical and explain your actions."""
             print("Agent execution completed")
             print(f"{'='*60}\n")
 
-            return str(message.content) if message.content else "Task completed"
+            if self.browser_plugin.task_summary:
+                return self.browser_plugin.task_summary
+            if message is not None and message.content:
+                return str(message.content)
+            return "Task completed"
 
         except Exception as e:
             error_msg = f"Error during agent execution: {str(e)}"
@@ -250,7 +300,7 @@ async def create_agent_from_env(headless: bool = None, use_mcp: bool = None) -> 
 
     # Get MCP mode from env if not specified
     if use_mcp is None:
-        use_mcp = os.getenv("USE_MCP", "false").lower() == "true"
+        use_mcp = os.getenv("USE_MCP", "true").lower() == "true"
 
     return BrowserAgent(
         azure_endpoint=azure_endpoint,

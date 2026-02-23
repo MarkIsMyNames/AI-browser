@@ -20,7 +20,7 @@ def print_banner():
     print(banner)
 
 
-async def run_agent(goal: str, headless: bool = False, use_mcp: bool = False):
+async def run_agent(goal: str, headless: bool = False, use_mcp: bool = True, max_iterations: int = 15):
     """Run the browser agent with a given goal.
 
     Args:
@@ -33,7 +33,7 @@ async def run_agent(goal: str, headless: bool = False, use_mcp: bool = False):
         agent = await create_agent_from_env(headless=headless, use_mcp=use_mcp)
 
         # Run the agent
-        result = await agent.run(goal)
+        result = await agent.run(goal, max_iterations=max_iterations)
 
         print(f"\n[Final Result]:\n{result}\n")
 
@@ -65,17 +65,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic mode
+  # MCP mode (default)
   python main.py "book me flights to seville leaving on tuesday"
 
-  # Enhanced MCP mode (recommended)
-  python main.py "search for python tutorials on youtube" --mcp
-
-  # Headless mode
+  # Headless MCP mode
   python main.py "find the top 3 news articles about AI on BBC" --headless
 
-  # MCP + headless
-  python main.py "search for hotels in paris" --mcp --headless
+  # Basic mode (no MCP)
+  python main.py "search for hotels in paris" --no-mcp
         """
     )
 
@@ -86,9 +83,10 @@ Examples:
     )
 
     parser.add_argument(
-        "--mcp",
+        "--no-mcp",
         action="store_true",
-        help="Use Playwright MCP server (enhanced mode with accessibility tree, screenshots, JS execution)"
+        dest="no_mcp",
+        help="Disable Playwright MCP server and use basic browser mode instead"
     )
 
     parser.add_argument(
@@ -109,13 +107,15 @@ Examples:
     # Print banner
     print_banner()
 
+    use_mcp = not args.no_mcp
+
     print(f"Task: {args.goal}")
-    mode_str = "MCP Enhanced" if args.mcp else ("Headless" if args.headless else "Visible browser")
+    mode_str = "Basic (no MCP)" if args.no_mcp else ("Headless MCP" if args.headless else "MCP Enhanced (visible)")
     print(f"Mode: {mode_str}")
     print(f"Max iterations: {args.max_iterations}\n")
 
     # Run the agent
-    asyncio.run(run_agent(args.goal, args.headless, args.mcp))
+    asyncio.run(run_agent(args.goal, args.headless, use_mcp, args.max_iterations))
 
 
 if __name__ == "__main__":

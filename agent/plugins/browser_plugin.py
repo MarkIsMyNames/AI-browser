@@ -18,6 +18,8 @@ class BrowserPlugin:
         self.browser: Browser = None
         self.page: Page = None
         self._initialized = False
+        self.task_completed = False
+        self.task_summary = ""
 
     async def initialize(self):
         """Initialize Playwright and browser."""
@@ -116,8 +118,8 @@ class BrowserPlugin:
                 # Get main visible text from body
                 content = await self.page.locator("body").text_content()
                 # Limit content to avoid token issues
-                if len(content) > 2000:
-                    content = content[:2000] + "... (truncated)"
+                if len(content) > 6000:
+                    content = content[:6000] + "... (truncated)"
                 return f"Page content: {content}"
         except Exception as e:
             return f"Error getting page content: {str(e)}"
@@ -201,3 +203,16 @@ Input fields: {inputs}
             return f"Successfully pressed key: {key}"
         except Exception as e:
             return f"Error pressing key {key}: {str(e)}"
+
+    @kernel_function(
+        name="task_complete",
+        description="Signal that the task is fully complete. Call this ONLY when you have gathered ALL required information and are ready to present a final answer to the user."
+    )
+    async def task_complete(
+        self,
+        summary: Annotated[str, "The complete final answer to present to the user, including all gathered information"]
+    ) -> Annotated[str, "Confirmation that task completion has been recorded"]:
+        """Signal task completion with a final summary."""
+        self.task_completed = True
+        self.task_summary = summary
+        return f"Task marked as complete. Summary recorded."

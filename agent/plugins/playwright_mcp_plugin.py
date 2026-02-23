@@ -1,9 +1,14 @@
 """Playwright MCP Plugin for Semantic Kernel."""
+import asyncio
 import json
+import os
+import time
 from typing import Annotated, Any, Dict, List, Optional
 from semantic_kernel.functions import kernel_function
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+
+PLAYWRIGHT_MCP_VERSION = os.environ.get("PLAYWRIGHT_MCP_VERSION", "0.0.68")
 
 
 class PlaywrightMCPPlugin:
@@ -22,22 +27,24 @@ class PlaywrightMCPPlugin:
         self._initialized = False
         self._available_tools: List[Dict[str, Any]] = []
         self.headless = headless
+        self.task_completed = False
+        self.task_summary = ""
+        self.help_requested = False
+        self.help_question = ""
 
     async def initialize(self):
         """Initialize connection to Playwright MCP server."""
         if not self._initialized:
-            # Start the MCP server as a subprocess
-            # Use firefox (or change to "chromium" or "webkit" as preferred)
+            t_start = time.monotonic()
+
             # Build args based on headless mode
-            mcp_args = ["-y", "@playwright/mcp@latest", "--browser", "firefox"]
-            # MCP defaults to headed (visible browser), only add --headless flag if requested
+            # Use chromium (faster startup than firefox)
+            mcp_args = ["-y", f"@playwright/mcp@{PLAYWRIGHT_MCP_VERSION}", "--browser", "chromium"]
             if self.headless:
                 mcp_args.append("--headless")
 
             # Add environment variables to ensure display works
-            import os
             env = os.environ.copy()
-            # Ensure DISPLAY is set for X11
             if 'DISPLAY' not in env:
                 env['DISPLAY'] = ':0'
 
@@ -47,22 +54,27 @@ class PlaywrightMCPPlugin:
                 env=env
             )
 
-            # Create stdio client connection (it's a context manager)
+            # Step 1: spawn npx subprocess + stdio handshake
+            print("[MCP] Starting MCP server via npx...")
+            t1 = time.monotonic()
             self._stdio_context = stdio_client(server_params)
             self.read_stream, self.write_stream = await self._stdio_context.__aenter__()
+            print(f"[MCP] stdio ready ({time.monotonic() - t1:.1f}s)")
+
+            # Step 2: MCP session init
+            t2 = time.monotonic()
             self.session = ClientSession(self.read_stream, self.write_stream)
-
-            # Initialize the session
             await self.session.__aenter__()
-
-            # Initialize the connection
             await self.session.initialize()
+            print(f"[MCP] Session initialised ({time.monotonic() - t2:.1f}s)")
 
-            # Get available tools from the server
+            # Step 3: list tools
+            t3 = time.monotonic()
             tools_response = await self.session.list_tools()
             self._available_tools = tools_response.tools if hasattr(tools_response, 'tools') else []
+            print(f"[MCP] Tools listed ({time.monotonic() - t3:.1f}s)")
 
-            print(f"[MCP] Connected to Playwright MCP server with {len(self._available_tools)} tools")
+            print(f"[MCP] Connected — {len(self._available_tools)} tools available  (total init: {time.monotonic() - t_start:.1f}s)")
             self._initialized = True
 
     async def cleanup(self):
@@ -94,7 +106,13 @@ class PlaywrightMCPPlugin:
         await self.initialize()
 
         try:
-            result = await self.session.call_tool(tool_name, arguments=arguments)
+            try:
+                result = await asyncio.wait_for(
+                    self.session.call_tool(tool_name, arguments=arguments),
+                    timeout=60.0
+                )
+            except asyncio.TimeoutError:
+                return f"Error calling {tool_name}: timed out after 60 seconds"
 
             # Extract content from result
             if hasattr(result, 'content') and result.content:
@@ -105,7 +123,9 @@ class PlaywrightMCPPlugin:
                     elif hasattr(item, 'data'):
                         content_parts.append(str(item.data))
 
-                return "\n".join(content_parts) if content_parts else "Success"
+                output = "\n".join(content_parts) if content_parts else "Success"
+
+                return output
 
             return str(result)
         except Exception as e:
@@ -173,19 +193,125 @@ class PlaywrightMCPPlugin:
 
     @kernel_function(
         name="browser_fill_form",
-        description="Fill form fields"
+        description='Fill form fields by label. Pass a JSON object mapping visible field labels to values, e.g. {"Email": "john@example.com", "First Name": "John"}. Do NOT include refs — they are resolved automatically.'
     )
     async def fill_form(
         self,
-        fields: Annotated[str, "JSON selector map"]
+        fields: Annotated[str, 'JSON string of field labels to values. MUST be a JSON string, not an object. Example: \'{"Email": "john@example.com", "First Name": "John"}\'']
     ) -> str:
-        """Fill multiple form fields."""
-        import json
-        try:
-            fields_dict = json.loads(fields) if isinstance(fields, str) else fields
-            return await self._call_tool("browser_fill_form", {"fields": fields_dict})
-        except json.JSONDecodeError as e:
-            return f"Error parsing fields JSON: {str(e)}"
+        """Fill form fields using a three-level fallback strategy to resolve labels to refs."""
+        import re, json
+        if isinstance(fields, dict):
+            fields_dict = fields
+        elif isinstance(fields, str):
+            try:
+                fields_dict = json.loads(fields)
+            except json.JSONDecodeError as e:
+                return f"Error parsing fields JSON: {str(e)}"
+        else:
+            return f"Unexpected fields type: {type(fields)}"
+
+        snapshot = await self._call_tool("browser_snapshot", {})
+        ref_map = {}
+
+        # Level 1: inputs that already carry their label in the snapshot
+        # e.g. textbox "Email address" [ref=e14]  (proper <label>, aria-label, or placeholder)
+        for kind, label, ref in re.findall(
+            r'(textbox|combobox|select) "([^"]+)" \[ref=(\w+)\]', snapshot
+        ):
+            ref_map[label.strip().lower()] = (ref, kind)
+
+        # Level 2: sibling generic label pattern (div-wrapped custom labels, no HTML association)
+        # e.g.  - generic: "Email"\n  - textbox [ref=e14]
+        for label, kind, ref in re.findall(
+            r'- generic \[ref=\w+\]: ([^\n\[]+)\n\s+- (textbox|combobox|select) \[ref=(\w+)\]',
+            snapshot
+        ):
+            key = label.strip().lower()
+            if key not in ref_map:
+                ref_map[key] = (ref, kind)
+
+        def find_ref(label):
+            """Exact then fuzzy lookup against ref_map."""
+            key = label.lower().strip()
+            if key in ref_map:
+                return ref_map[key]
+            for snap_label, entry in ref_map.items():
+                if key in snap_label or snap_label in key:
+                    return entry
+            return None
+
+        resolved, js_fallback = [], {}
+        for label, value in fields_dict.items():
+            match = find_ref(label)
+            if match:
+                ref, kind = match
+                resolved.append({"name": label, "type": kind, "ref": ref, "value": value})
+            else:
+                js_fallback[label] = value
+
+        results = []
+
+        # Fill all snapshot-resolved fields in one MCP call
+        if resolved:
+            results.append(await self._call_tool("browser_fill_form", {"fields": resolved}))
+
+        # Level 3: JS DOM search for anything the snapshot couldn't resolve
+        # Tries name/id attribute, input type, placeholder, then nearest text node
+        for label, value in js_fallback.items():
+            js = """(args) => {
+                const label = args.label.toLowerCase();
+                const value = args.value;
+
+                function fill(el) {
+                    if (!el || el.disabled || el.readOnly) return false;
+                    if (el.tagName === 'SELECT') {
+                        const opt = Array.from(el.options).find(o =>
+                            o.text.toLowerCase().includes(value.toLowerCase()) ||
+                            o.value.toLowerCase() === value.toLowerCase()
+                        );
+                        el.value = opt ? opt.value : value;
+                    } else {
+                        el.value = value;
+                    }
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                    return true;
+                }
+
+                const inputs = Array.from(document.querySelectorAll('input, select, textarea'));
+
+                // name / id attribute
+                for (const el of inputs) {
+                    const attr = ((el.name || '') + ' ' + (el.id || '')).toLowerCase().replace(/[_\\-]/g, ' ');
+                    if (attr.includes(label) && fill(el)) return 'filled via name/id: ' + (el.name || el.id);
+                }
+                // placeholder
+                for (const el of inputs) {
+                    if ((el.placeholder || '').toLowerCase().includes(label) && fill(el))
+                        return 'filled via placeholder: ' + el.placeholder;
+                }
+                // input type (e.g. label="email" → type="email")
+                for (const el of inputs) {
+                    if ((el.type || '').toLowerCase() === label && fill(el))
+                        return 'filled via input type: ' + el.type;
+                }
+                // nearest visible text node in parent chain
+                for (const el of inputs) {
+                    let node = el.parentElement;
+                    for (let i = 0; i < 3 && node; i++, node = node.parentElement) {
+                        if (node.textContent.toLowerCase().includes(label) && fill(el))
+                            return 'filled via nearby text for: ' + args.label;
+                    }
+                }
+                return 'not found: ' + args.label;
+            }"""
+            result = await self._call_tool(
+                "browser_evaluate", {"function": js, "arg": {"label": label, "value": value}}
+            )
+            results.append(f"[JS fallback] {label}: {result}")
+
+        return "\n".join(results) if results else "No fields filled"
 
     @kernel_function(
         name="browser_select_option",
@@ -227,15 +353,31 @@ class PlaywrightMCPPlugin:
         script: Annotated[str, "JS code"]
     ) -> str:
         """Execute JavaScript."""
-        return await self._call_tool("browser_evaluate", {"expression": script})
+        return await self._call_tool("browser_evaluate", {"function": script})
 
     @kernel_function(
         name="browser_snapshot",
         description="Get page accessibility tree"
     )
     async def get_snapshot(self) -> str:
-        """Get accessibility snapshot of the page."""
-        return await self._call_tool("browser_snapshot", {})
+        """Get accessibility snapshot of the page, with a form field summary appended."""
+        import re
+        result = await self._call_tool("browser_snapshot", {})
+
+        # Labels on some pages are sibling generic elements rather than being
+        # part of the textbox/combobox accessible name. Parse the tree to build
+        # a clean "Label → ref" table so the LLM doesn't have to infer it.
+        pattern = r'- generic \[ref=\w+\]: ([^\n\[]+)\n\s+- (textbox|combobox|select) \[ref=(\w+)\]'
+        matches = re.findall(pattern, result)
+        if matches:
+            lines = [f'  "{label.strip()}" → ref={ref} ({kind})'
+                     for label, kind, ref in matches]
+            result += (
+                "\n\n### Form Fields (use these refs with browser_type / browser_select_option)\n"
+                + "\n".join(lines) + "\n"
+            )
+
+        return result
 
     @kernel_function(
         name="browser_close",
@@ -389,55 +531,15 @@ class PlaywrightMCPPlugin:
     async def dismiss_cookie_consent(self) -> str:
         """Automatically dismiss cookie consent banners using Playwright selectors and JavaScript."""
 
-        # Strategy 1: Try browser_click with Playwright text selectors
-        text_selectors = [
-            "text=Accept all",
-            "text=I agree",
-            "text=Accept",
-            "text=Agree",
-            "text=Continue",
-            "text=OK"
-        ]
-
-        for selector in text_selectors:
-            try:
-                result = await self._call_tool("browser_click", {"selector": selector})
-                if result and "error" not in result.lower() and "not found" not in result.lower():
-                    print(f"[DEBUG] Successfully clicked with selector: {selector}")
-                    return f"Clicked cookie consent button with: {selector}"
-            except Exception as e:
-                print(f"[DEBUG] Failed clicking {selector}: {str(e)}")
-                continue
-
-        # Strategy 2: Try ID-based selectors (Google-specific)
-        id_selectors = [
-            'button[id="L2AGLb"]',  # Google "Accept all" button
-            '#W0wltc',  # Google "Reject all" button alternative
-            'form[action*="consent"] button'
-        ]
-
-        for selector in id_selectors:
-            try:
-                result = await self._call_tool("browser_click", {"selector": selector})
-                if result and "error" not in result.lower() and "not found" not in result.lower():
-                    print(f"[DEBUG] Successfully clicked with selector: {selector}")
-                    return f"Clicked cookie consent button with ID selector"
-            except Exception as e:
-                print(f"[DEBUG] Failed clicking {selector}: {str(e)}")
-                continue
-
-        # Strategy 3: JavaScript fallback with VALID DOM methods
-        print("[DEBUG] Text and ID selectors failed, trying JavaScript fallback")
-        javascript_fallback = """
-        (function() {
-            // Common button text patterns (case-insensitive)
+        # JavaScript fallback with VALID DOM methods
+        print("[DEBUG] Attempting JavaScript cookie consent dismissal")
+        javascript_fallback = """() => {
             const acceptPatterns = [
                 'accept all', 'accept cookies', 'accept',
                 'agree', 'i agree', 'consent',
                 'allow all', 'continue', 'got it', 'ok'
             ];
 
-            // Search all buttons
             const buttons = Array.from(document.querySelectorAll('button, a[role="button"], div[role="button"], input[type="button"]'));
 
             for (const button of buttons) {
@@ -448,7 +550,6 @@ class PlaywrightMCPPlugin:
 
                 for (const pattern of acceptPatterns) {
                     if (combinedText.includes(pattern)) {
-                        // Check if visible
                         const rect = button.getBoundingClientRect();
                         const style = window.getComputedStyle(button);
                         const isVisible = rect.width > 0 && rect.height > 0 &&
@@ -458,16 +559,41 @@ class PlaywrightMCPPlugin:
 
                         if (isVisible) {
                             button.click();
-                            return `Clicked cookie consent: "${text.substring(0, 50)}"`;
+                            return 'Clicked cookie consent: "' + text.substring(0, 50) + '"';
                         }
                     }
                 }
             }
 
             return 'No visible cookie consent button found';
-        })();
-        """
+        }"""
 
-        result = await self._call_tool("browser_evaluate", {"expression": javascript_fallback})
+        result = await self._call_tool("browser_evaluate", {"function": javascript_fallback})
         print(f"[DEBUG] JavaScript fallback result: {result}")
         return result
+
+    @kernel_function(
+        name="request_help",
+        description="Request input from the user when you are genuinely stuck and cannot proceed autonomously. Only call this after you have already tried multiple approaches and exhausted your options. Describe exactly what is blocking you."
+    )
+    async def request_help(
+        self,
+        question: Annotated[str, "A clear description of what is blocking you and what you need from the user to continue"]
+    ) -> str:
+        """Pause execution and request user input for a genuine blocker."""
+        self.help_requested = True
+        self.help_question = question
+        return "Help request recorded. Waiting for user input."
+
+    @kernel_function(
+        name="task_complete",
+        description="Signal that the task is fully complete. Call this ONLY when you have gathered ALL required information and are ready to present a final answer to the user."
+    )
+    async def task_complete(
+        self,
+        summary: Annotated[str, "The complete final answer to present to the user, including all gathered information"]
+    ) -> str:
+        """Signal task completion with a final summary."""
+        self.task_completed = True
+        self.task_summary = summary
+        return "Task marked as complete. Summary recorded."
