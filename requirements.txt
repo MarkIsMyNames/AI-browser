@@ -16,3 +16,7 @@ python-dotenv>=1.0.0
 
 # Additional utilities
 asyncio>=3.4.3
+
+# PII scrubbing
+phonenumbers>=8.13.0
+phonenumberslite
