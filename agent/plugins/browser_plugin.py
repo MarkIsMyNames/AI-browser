@@ -20,6 +20,8 @@ class BrowserPlugin:
         self._initialized = False
         self.task_completed = False
         self.task_summary = ""
+        self.help_requested = False
+        self.help_question = ""
 
     async def initialize(self):
         """Initialize Playwright and browser."""
@@ -203,6 +205,19 @@ Input fields: {inputs}
             return f"Successfully pressed key: {key}"
         except Exception as e:
             return f"Error pressing key {key}: {str(e)}"
+
+    @kernel_function(
+        name="request_help",
+        description="Request input from the user when you are genuinely stuck and cannot proceed autonomously. Only call this after you have already tried multiple approaches and exhausted your options. Describe exactly what is blocking you."
+    )
+    async def request_help(
+        self,
+        question: Annotated[str, "A clear description of what is blocking you and what you need from the user to continue"]
+    ) -> Annotated[str, "Confirmation that the help request was recorded"]:
+        """Pause execution and request user input for a genuine blocker."""
+        self.help_requested = True
+        self.help_question = question
+        return "Help request recorded. Waiting for user input."
 
     @kernel_function(
         name="task_complete",

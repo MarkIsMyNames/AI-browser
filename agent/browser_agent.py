@@ -1,6 +1,7 @@
 """Browser Agent using Semantic Kernel for orchestration."""
 import os
 import asyncio
+from typing import Annotated, Awaitable, Callable, List, Optional
 from semantic_kernel import Kernel
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
@@ -20,26 +21,40 @@ class BrowserAgent:
 
     def __init__(
         self,
-        azure_endpoint: str,
-        azure_api_key: str,
-        deployment_name: str,
+        azure_endpoint: str = None,
+        azure_api_key: str = None,
+        deployment_name: str = None,
         api_version: str = "2024-02-15-preview",
         headless: bool = False,
-        use_mcp: bool = False
+        use_mcp: bool = False,
+        kernel: Kernel = None,
     ):
         """Initialize the Browser Agent.
 
         Args:
-            azure_endpoint: Azure OpenAI endpoint URL
-            azure_api_key: Azure OpenAI API key
-            deployment_name: Azure OpenAI deployment name
-            api_version: Azure OpenAI API version
+            azure_endpoint: Azure OpenAI endpoint URL (ignored if kernel is provided)
+            azure_api_key: Azure OpenAI API key (ignored if kernel is provided)
+            deployment_name: Azure OpenAI deployment name (ignored if kernel is provided)
+            api_version: Azure OpenAI API version (ignored if kernel is provided)
             headless: Whether to run browser in headless mode (only for non-MCP mode)
             use_mcp: Whether to use Playwright MCP server (recommended)
+            kernel: Pre-built Semantic Kernel instance. If provided, Azure params are ignored.
         """
-        self.kernel = Kernel()
         self.use_mcp = use_mcp
-        self.chat_history = ChatHistory()
+
+        if kernel is not None:
+            self.kernel = kernel
+        else:
+            self.kernel = Kernel()
+            self.kernel.add_service(
+                AzureChatCompletion(
+                    service_id="chat_completion",
+                    endpoint=azure_endpoint,
+                    api_key=azure_api_key,
+                    deployment_name=deployment_name,
+                    api_version=api_version
+                )
+            )
 
         # Choose browser plugin based on mode
         if use_mcp:
@@ -52,17 +67,6 @@ class BrowserAgent:
             plugin_name = "browser"
             mode_desc = "headless" if headless else "headed (visible)"
             print(f"[Browser Agent] Using direct Playwright integration (basic mode, {mode_desc})")
-
-        # Add Azure OpenAI Chat Completion service
-        self.kernel.add_service(
-            AzureChatCompletion(
-                service_id="chat_completion",
-                endpoint=azure_endpoint,
-                api_key=azure_api_key,
-                deployment_name=deployment_name,
-                api_version=api_version
-            )
-        )
 
         # Register the browser plugin
         self.kernel.add_plugin(
@@ -118,26 +122,76 @@ Strategy:
 
 Be methodical and explain your actions."""
 
-    async def run(self, user_goal: str, max_iterations: int = 15) -> str:
+    async def run(
+        self,
+        user_goal: str,
+        max_iterations: int = 15,
+        history: List[dict] = None,
+        on_thinking: Callable[[str], None] = None,
+        on_agent_message: Callable[[str], None] = None,
+        on_request_help: Callable[[str], Awaitable[Optional[str]]] = None,
+        on_task_complete: Callable[[str], Awaitable[Optional[str]]] = None,
+        should_stop: Callable[[], bool] = None,
+    ) -> str:
         """Run the agent to accomplish a user goal.
 
         Args:
             user_goal: The goal the user wants to accomplish
             max_iterations: Maximum number of agent iterations
+            history: Prior conversation as list of {"role": "user"/"assistant", "content": str}
+            on_thinking: Called with status/progress messages
+            on_agent_message: Called with each LLM text response
+            on_request_help: Called when agent needs user input; return the response string,
+                             or None to stop the agent (GUI mode)
+            on_task_complete: Called when agent signals completion with its summary; return None
+                              to stop, or a feedback string to continue (CLI mode)
+            should_stop: Called each iteration; return True to abort
 
         Returns:
             Final response from the agent
         """
-        print(f"\n{'='*60}")
-        print(f"Agent Goal: {user_goal}")
-        print(f"{'='*60}\n")
+        # Default callbacks preserve original CLI behaviour
+        async def _default_request_help(question: str) -> Optional[str]:
+            print(f"\n[Agent needs help]: {question}")
+            try:
+                user_input = (await asyncio.to_thread(
+                    input, "\nYour response (press Enter to let the agent continue trying): "
+                )).strip()
+                return user_input or "Continue and try a different approach."
+            except (EOFError, KeyboardInterrupt):
+                return "Continue and try a different approach."
+
+        async def _default_task_complete(summary: str) -> Optional[str]:
+            print(f"\n[Final Answer]:\n{summary}")
+            try:
+                user_response = (await asyncio.to_thread(
+                    input, "\nAre you satisfied with this result? (yes/no/feedback): "
+                )).strip().lower()
+                if user_response in ['yes', 'y', '']:
+                    return None
+                return user_response
+            except (EOFError, KeyboardInterrupt):
+                return None
+
+        _on_thinking = on_thinking or (lambda msg: print(f"\n--- {msg} ---"))
+        _on_agent_message = on_agent_message or (lambda msg: print(f"\n[Agent]: {msg}"))
+        _on_request_help = on_request_help or _default_request_help
+        _on_task_complete = on_task_complete or _default_task_complete
+
+        _on_thinking(f"Agent Goal: {user_goal}")
 
         # Eagerly initialize the browser/MCP server before the first LLM call
-        # so the delay is visible and upfront rather than hidden mid-run
         await self.browser_plugin.initialize()
 
-        # Initialize chat history with system prompt
+        # Build chat history: system prompt + optional prior turns + current goal
+        self.chat_history = ChatHistory()
         self.chat_history.add_system_message(self.system_prompt)
+        if history:
+            for item in history:
+                if item["role"] == "user":
+                    self.chat_history.add_user_message(item["content"])
+                else:
+                    self.chat_history.add_assistant_message(item["content"])
         self.chat_history.add_user_message(user_goal)
 
         # Get the chat completion service
@@ -155,8 +209,11 @@ Be methodical and explain your actions."""
         message = None
         try:
             while iteration < max_iterations:
+                if should_stop and should_stop():
+                    break
+
                 iteration += 1
-                print(f"\n--- Iteration {iteration}/{max_iterations} ---")
+                _on_thinking(f"Iteration {iteration}/{max_iterations}")
 
                 # Get response from LLM (with auto function calling)
                 response = await chat_completion.get_chat_message_contents(
@@ -191,64 +248,36 @@ Be methodical and explain your actions."""
                     for msg in tail:
                         self.chat_history.add_message(msg)
 
-                # Print the agent's reasoning
                 if message.content:
-                    print(f"\n[Agent]: {message.content}")
+                    _on_agent_message(str(message.content))
 
                 # Check if agent called request_help() — pause and get user input
                 if self.browser_plugin.help_requested:
-                    print(f"\n[Agent needs help]: {self.browser_plugin.help_question}")
-                    try:
-                        user_input = (await asyncio.to_thread(
-                            input, "\nYour response (press Enter to let the agent continue trying): "
-                        )).strip()
-                        self.browser_plugin.help_requested = False
-                        self.browser_plugin.help_question = ""
-                        if user_input:
-                            self.chat_history.add_user_message(user_input)
-                        else:
-                            self.chat_history.add_user_message("Continue and try a different approach.")
-                    except (EOFError, KeyboardInterrupt):
-                        self.browser_plugin.help_requested = False
-                        self.browser_plugin.help_question = ""
-                        self.chat_history.add_user_message("Continue and try a different approach.")
+                    question = self.browser_plugin.help_question
+                    self.browser_plugin.help_requested = False
+                    self.browser_plugin.help_question = ""
+                    user_input = await _on_request_help(question)
+                    if user_input is None:
+                        break  # GUI: stop agent so user can reply via the chat input
+                    self.chat_history.add_user_message(user_input)
 
                 # Check if agent explicitly signalled task completion via task_complete()
                 if self.browser_plugin.task_completed:
-                    print("\n[Agent has signalled task completion]")
-                    final_summary = self.browser_plugin.task_summary
-                    if final_summary:
-                        print(f"\n[Final Answer]:\n{final_summary}")
-
-                    try:
-                        user_response = (await asyncio.to_thread(
-                            input, "\nAre you satisfied with this result? (yes/no/feedback): "
-                        )).strip().lower()
-
-                        if user_response in ['yes', 'y']:
-                            print("[Task completed successfully]")
-                            break
-                        elif user_response in ['no', 'n']:
-                            feedback = await asyncio.to_thread(input, "What would you like me to change or fix? ")
-                            self.browser_plugin.task_completed = False
-                            self.browser_plugin.task_summary = ""
-                            self.chat_history.add_user_message(f"Please continue. User feedback: {feedback}")
-                            print("\n[Continuing with user feedback...]")
-                        else:
-                            self.browser_plugin.task_completed = False
-                            self.browser_plugin.task_summary = ""
-                            self.chat_history.add_user_message(f"Please continue. User feedback: {user_response}")
-                            print("\n[Continuing with user feedback...]")
-                    except (EOFError, KeyboardInterrupt):
-                        print("\n[No user input - assuming task complete]")
-                        break
+                    summary = self.browser_plugin.task_summary
+                    self.browser_plugin.task_completed = False
+                    feedback = await _on_task_complete(summary)
+                    if feedback is None:
+                        break  # Done
+                    else:
+                        self.browser_plugin.task_summary = ""
+                        self.chat_history.add_user_message(
+                            f"Please continue. User feedback: {feedback}"
+                        )
 
                 # Small delay to make output readable
                 await asyncio.sleep(0.5)
 
-            print(f"\n{'='*60}")
-            print("Agent execution completed")
-            print(f"{'='*60}\n")
+            _on_thinking("Agent execution completed")
 
             if self.browser_plugin.task_summary:
                 return self.browser_plugin.task_summary
