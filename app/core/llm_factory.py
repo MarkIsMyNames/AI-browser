@@ -11,7 +11,7 @@ class LLMFactory:
     def create_kernel() -> Kernel:
         kernel = Kernel()
 
-        service_id = "default_chat"
+        service_id = "chat_completion"
 
         if Config.LLM_PROVIDER == "ollama":
             # Ollama provides an OpenAI compatible API

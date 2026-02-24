@@ -161,7 +161,6 @@ class MainWindow(QMainWindow):
         self._worker = AgentWorker(text, self._chat_history[:-1])  # pass history minus current
         self._worker.agent_message.connect(self._on_agent_message)
         self._worker.function_call.connect(lambda s: self._append_log(self.functions_view, s))
-        self._worker.perception_update.connect(lambda s: self._on_perception(s))
         self._worker.thinking.connect(lambda s: self._append_log(self.thinking_view, s))
         self._worker.error.connect(lambda s: self._append_chat("error", s))
         self._worker.finished_signal.connect(self._on_finished)

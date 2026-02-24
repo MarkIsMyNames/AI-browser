@@ -1,30 +1,29 @@
 """
-Background worker that runs the Semantic Kernel agent in a QThread,
+Background worker that runs the BrowserAgent in a QThread,
 emitting signals for the GUI to consume.
 """
 
 import asyncio
 import traceback
+from typing import Optional
+
 from PySide6.QtCore import QThread, Signal
 
-from semantic_kernel.contents.chat_history import ChatHistory
-from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
-from semantic_kernel.agents import ChatCompletionAgent
-
+from agent.browser_agent import BrowserAgent
 from app.core.llm_factory import LLMFactory
-from app.plugins.browser_plugin import BrowserPlugin
-from app.plugins.cdp_perception_plugin import CDPPerceptionPlugin
+
+
+MAX_HISTORY = 20
 
 
 class AgentWorker(QThread):
-    """Runs the SK agent loop in a background thread."""
+    """Runs the BrowserAgent in a background thread."""
 
     # Signals
     agent_message = Signal(str)          # Agent response text
     function_call = Signal(str)          # Function name + args being called
-    perception_update = Signal(str)      # Perception/observation output
-    error = Signal(str)                  # Error messages
     thinking = Signal(str)               # Status/thinking updates
+    error = Signal(str)                  # Error messages
     finished_signal = Signal()           # Done
 
     def __init__(self, user_message: str, chat_history_items: list = None, parent=None):
@@ -56,64 +55,42 @@ class AgentWorker(QThread):
             self.error.emit(f"Kernel init failed: {e}")
             return
 
-        browser = BrowserPlugin()
-        perception = CDPPerceptionPlugin(browser)
+        agent = BrowserAgent(kernel=kernel, use_mcp=True)
 
-        # Wrap perception to capture output
-        original_observe = perception.observe.__func__ if hasattr(perception.observe, '__func__') else None
+        worker = self
 
-        plugin_self = self
+        def on_thinking(msg: str):
+            worker.thinking.emit(msg)
 
-        class InstrumentedPerception(CDPPerceptionPlugin):
-            async def observe(self_inner) -> str:
-                plugin_self.function_call.emit("CDPPerceptionPlugin.observe()")
-                result = await super().observe()
-                plugin_self.perception_update.emit(result)
-                return result
+        def on_agent_message(msg: str):
+            worker.agent_message.emit(msg)
 
-        instrumented_perception = InstrumentedPerception(browser)
+        async def on_request_help(question: str) -> Optional[str]:
+            # Emit as an agent message so the user sees what's blocking the agent,
+            # then stop so they can reply via the normal chat input.
+            worker.agent_message.emit(f"I need your help to continue:\n\n{question}")
+            return None
 
-        agent = ChatCompletionAgent(
-            kernel=kernel,
-            name="BrowserAgent",
-            instructions="""You are an autonomous browser agent. Your goal is to help the user achieve their task by interacting with the browser.
+        async def on_task_complete(summary: str) -> Optional[str]:
+            # Emit the final answer and stop — no confirmation prompt needed in the GUI.
+            worker.agent_message.emit(summary)
+            return None
 
-You have two primary capabilities:
-1. Perception: Call observe() to see interactive elements on the current page (via CDP accessibility tree).
-2. Browser: navigate, click, type_text.
-
-Standard loop:
-1. Call observe() to see what's on screen.
-2. Decide the next action based on the observation.
-3. If the goal is achieved, answer the user.
-
-Always observe before acting. Use the numeric IDs from observation.""",
-            plugins=[browser, instrumented_perception],
-            function_choice_behavior=FunctionChoiceBehavior.Auto(),
-        )
-
-        self.thinking.emit("Agent ready. Sending message...")
-
-        chat_history = ChatHistory()
-        for item in self._chat_history_items:
-            if item["role"] == "user":
-                chat_history.add_user_message(item["content"])
-            else:
-                chat_history.add_assistant_message(item["content"])
-
-        chat_history.add_user_message(self.user_message)
+        history = self._chat_history_items[-MAX_HISTORY:]
 
         try:
-            async for response in agent.invoke(chat_history):
-                if self._stop_requested:
-                    break
-                if response.content:
-                    self.agent_message.emit(response.content)
+            await agent.run(
+                self.user_message,
+                history=history,
+                on_thinking=on_thinking,
+                on_agent_message=on_agent_message,
+                on_request_help=on_request_help,
+                on_task_complete=on_task_complete,
+                should_stop=lambda: worker._stop_requested,
+            )
         except Exception as e:
             err_str = str(e)
             if "connect" in err_str.lower():
                 self.error.emit(f"Cannot connect to LLM server: {e}")
             else:
                 self.error.emit(f"Agent error: {e}\n{traceback.format_exc()}")
-        finally:
-            await browser.close()
