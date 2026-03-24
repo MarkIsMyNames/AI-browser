@@ -259,3 +259,4 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.statusBar().showMessage("Ready")
         self._worker = None
+        self._chat_history = []
