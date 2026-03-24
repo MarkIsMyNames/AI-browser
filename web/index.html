@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chat UI — AI Browser Agent</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap');
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #f0ebe1;
+      font-family: 'DM Sans', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    /* ── CHAT WINDOW ── */
+    .chat-window {
+      width: 100%;
+      max-width: 680px;
+      height: 88vh;
+      display: flex;
+      flex-direction: column;
+      background: #faf8f3;
+      border-radius: 16px;
+      box-shadow: 0 8px 40px rgba(58,46,34,0.13);
+      overflow: hidden;
+    }
+
+    /* Header */
+    .chat-header {
+      padding: 18px 24px;
+      border-bottom: 1px solid #e8e0d4;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: #faf8f3;
+    }
+    .chat-header .name {
+      font-family: 'Playfair Display', serif;
+      font-size: 1rem;
+      color: #3a2e22;
+      font-style: italic;
+    }
+    .chat-header .tagline {
+      font-size: 0.72rem;
+      color: #9a8a78;
+      letter-spacing: 0.08em;
+    }
+    .header-text { display: flex; flex-direction: column; gap: 1px; }
+
+    /* Messages */
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 24px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      scroll-behavior: smooth;
+    }
+    .messages::-webkit-scrollbar { width: 4px; }
+    .messages::-webkit-scrollbar-thumb { background: #d4c8b8; border-radius: 2px; }
+
+    .msg {
+      display: flex;
+      gap: 10px;
+      animation: fadeUp 0.25s ease both;
+    }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .msg.user { flex-direction: row-reverse; }
+
+    .bubble {
+      max-width: 72%;
+      padding: 11px 16px;
+      border-radius: 16px;
+      font-size: 0.9rem;
+      line-height: 1.55;
+      color: #3a2e22;
+    }
+    .msg.user   .bubble { background: #3a2e22; color: #f0ebe1; border-bottom-right-radius: 4px; }
+    .msg.bot    .bubble { background: #ede7dc; border-bottom-left-radius: 4px; }
+
+    /* Thinking bubble (3 dots while waiting before stickman hands off) */
+    .thinking-bubble {
+      display: flex; gap: 5px; align-items: center;
+      padding: 14px 18px;
+    }
+    .thinking-bubble span {
+      width: 7px; height: 7px;
+      background: #9a8a78;
+      border-radius: 50%;
+      animation: blink 1.2s ease-in-out infinite;
+    }
+    .thinking-bubble span:nth-child(2) { animation-delay: 0.2s; }
+    .thinking-bubble span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink {
+      0%,80%,100% { transform: scale(1); opacity: 0.4; }
+      40%          { transform: scale(1.3); opacity: 1; }
+    }
+
+    /* ── INPUT BAR ── */
+    .input-bar {
+      padding: 14px 16px;
+      border-top: 1px solid #e8e0d4;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: #faf8f3;
+    }
+
+    /* Stickman canvas — lives here */
+    #stickman-canvas {
+      flex-shrink: 0;
+      display: block;
+      align-self: center;
+    }
+
+    .input-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #ede7dc;
+      border-radius: 24px;
+      padding: 8px 14px 8px 18px;
+    }
+
+    textarea {
+      flex: 1;
+      border: none;
+      background: transparent;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.9rem;
+      color: #3a2e22;
+      resize: none;
+      outline: none;
+      max-height: 120px;
+      line-height: 1.5;
+    }
+    textarea::placeholder { color: #a89a88; }
+
+    .send-btn {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: #3a2e22;
+      border: none;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .send-btn:hover { background: #5c4733; transform: scale(1.05); }
+    .send-btn:disabled { background: #c4b8a8; cursor: default; transform: none; }
+    .send-btn svg { width: 15px; height: 15px; fill: #f0ebe1; }
+  </style>
+</head>
+<body>
+
+<div class="chat-window">
+  <div class="chat-header">
+    <div class="header-text">
+      <div class="name">AI Browser Agent</div>
+      <div class="tagline">Distinguished Web Assistant</div>
+    </div>
+  </div>
+
+  <div class="messages" id="messages">
+    <div class="msg bot">
+      <div class="bubble">Good day. How may I be of service?</div>
+    </div>
+  </div>
+
+  <div class="input-bar">
+    <!-- Stickman loader lives here, to the left of input -->
+    <canvas id="stickman-canvas" width="76" height="88"></canvas>
+
+    <div class="input-wrap">
+      <textarea id="input" rows="1" placeholder="Ask something…" onkeydown="handleKey(event)"></textarea>
+      <button class="send-btn" id="send-btn" onclick="sendMessage()">
+        <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════
+//  STICKMAN LOADER
+// ═══════════════════════════════════════════════
+const canvas = document.getElementById('stickman-canvas');
+const ctx    = canvas.getContext('2d');
+
+// Scale everything to fit 54×54 canvas
+// Original design space: 220×280, stickman centered around x=110
+// We'll scale by ~0.25 and offset
+const SCALE  = 0.245;
+const OX     = 38;  // x center of canvas
+const OY     = 48;  // y center for spinner ring
+
+// Spinner ring center & radius (in local coords)
+const CX = 0, CY = 0, RING_R = 21;
+
+// Idle line endpoints relative to OX, OY
+// Original coords minus (110, 175) then scaled
+function p(x, y) {
+  return { x: (x - 110) * SCALE, y: (y - 175) * SCALE };
+}
+
+const IDLE_LINES = [
+  [p(110,116), p(110,175)],  // torso
+  [p(110,132), p( 78,155)],  // left arm
+  [p(110,132), p(142,155)],  // right arm
+  [p(110,175), p( 85,215)],  // left leg
+  [p(110,175), p(135,215)],  // right leg
+];
+
+// Head idle pos (relative to spinner center)
+const HEAD_CX_IDLE = 0;
+const HEAD_CY_IDLE = (95 - 175) * SCALE;  // above ring center
+const HEAD_R = 20 * SCALE;
+
+function makeArcSegs() {
+  const n = IDLE_LINES.length;
+  const gap = 0.35;
+  const arcLen = (2 * Math.PI - n * gap) / n;
+  return IDLE_LINES.map((_, i) => {
+    const start = i * (arcLen + gap) - Math.PI / 2;
+    return { start, end: start + arcLen };
+  });
+}
+const ARC_SEGS = makeArcSegs();
+
+let isLoading  = false;
+let progress   = 0;
+let spinAngle  = 0;
+let orbitAngle = -Math.PI / 2;
+let idleBob    = 0;
+let lastTs     = null;
+
+function ease(t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2; }
+function lerp(a, b, t) { return a + (b-a)*t; }
+
+function drawStickman(ts) {
+  if (lastTs === null) lastTs = ts;
+  const dt = Math.min((ts - lastTs)/1000, 0.05);
+  lastTs = ts;
+
+  // Advance progress
+  const spd = 1 / 0.6;
+  if (isLoading) progress = Math.min(1, progress + dt * spd);
+  else           progress = Math.max(0, progress - dt * spd);
+
+  const t  = ease(progress);
+  const ti = 1 - t;
+
+  spinAngle  += 2.5 * dt * t;
+  orbitAngle += 2.0 * dt * t;
+  idleBob    += dt;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.translate(OX, OY);  // move origin to spinner center
+
+  // ── BODY SEGMENTS ──
+  IDLE_LINES.forEach((ln, i) => {
+    const seg = ARC_SEGS[i];
+    const a1  = seg.start + spinAngle;
+    const a2  = seg.end   + spinAngle;
+
+    const ax1 = RING_R * Math.cos(a1), ay1 = RING_R * Math.sin(a1);
+    const ax2 = RING_R * Math.cos(a2), ay2 = RING_R * Math.sin(a2);
+
+    const x1 = lerp(ln[0].x, ax1, t), y1 = lerp(ln[0].y, ay1, t);
+    const x2 = lerp(ln[1].x, ax2, t), y2 = lerp(ln[1].y, ay2, t);
+
+    const amid = (a1 + a2) / 2;
+    const cpx  = lerp((ln[0].x+ln[1].x)/2, RING_R*Math.cos(amid), t);
+    const cpy  = lerp((ln[0].y+ln[1].y)/2, RING_R*Math.sin(amid), t);
+
+    ctx.save();
+    ctx.strokeStyle = '#3a2e22';
+    ctx.lineWidth   = 2.5;
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.quadraticCurveTo(cpx, cpy, x2, y2);
+    ctx.stroke();
+    ctx.restore();
+  });
+
+  // ── HEAD ──
+  const orbitR = (RING_R + HEAD_R + 2) * t;
+  const hx = lerp(HEAD_CX_IDLE, orbitR * Math.cos(orbitAngle), t);
+  const hy = lerp(HEAD_CY_IDLE, orbitR * Math.sin(orbitAngle), t);
+  const bob = ti > 0.97 ? Math.sin(idleBob * 1.8) * 1.2 : 0;
+
+  // Head circle
+  ctx.save();
+  ctx.strokeStyle = '#3a2e22'; ctx.lineWidth = 2;
+  ctx.fillStyle   = '#f0ebe1';
+  ctx.beginPath();
+  ctx.arc(hx, hy + bob, HEAD_R, 0, Math.PI*2);
+  ctx.fill(); ctx.stroke();
+  ctx.restore();
+
+  // Monocle
+  const mAngle = t > 0.05 ? orbitAngle : 0.3;
+  const mox = hx + Math.cos(mAngle) * HEAD_R * 0.45;
+  const moy = hy + bob + Math.sin(mAngle) * HEAD_R * 0.3;
+  const mR  = HEAD_R * 0.38;
+  ctx.save();
+  ctx.strokeStyle = '#3a2e22'; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.arc(mox, moy, mR, 0, Math.PI*2); ctx.stroke();
+  const cA = mAngle + Math.PI * 0.4;
+  ctx.beginPath();
+  ctx.moveTo(mox + Math.cos(cA)*mR, moy + Math.sin(cA)*mR);
+  ctx.lineTo(mox + Math.cos(cA)*mR*2, moy + Math.sin(cA)*mR*2);
+  ctx.stroke();
+  ctx.restore();
+
+  // Top hat
+  const hatY  = hy + bob - HEAD_R;
+  const brimW = HEAD_R * 2.5, brimH = HEAD_R * 0.32;
+  const crnW  = HEAD_R * 1.55, crnH  = HEAD_R * 1.45;
+  ctx.save();
+  ctx.fillStyle = '#3a2e22';
+  ctx.beginPath();
+  ctx.roundRect(hx - brimW/2, hatY - brimH, brimW, brimH, 1);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(hx - crnW/2, hatY - brimH - crnH, crnW, crnH, 1);
+  ctx.fill();
+  ctx.fillStyle = '#5c4733';
+  ctx.beginPath();
+  ctx.roundRect(hx - crnW/2, hatY - brimH - crnH*0.3, crnW, crnH*0.28, 1);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.restore();  // un-translate
+  requestAnimationFrame(drawStickman);
+}
+
+requestAnimationFrame(drawStickman);
+
+
+// ═══════════════════════════════════════════════
+//  CHAT LOGIC (wired to /api/chat backend)
+// ═══════════════════════════════════════════════
+const messagesEl = document.getElementById('messages');
+const inputEl    = document.getElementById('input');
+const sendBtn    = document.getElementById('send-btn');
+
+// Maintain simple in-memory history for context
+const chatHistory = [];
+
+// Auto-resize textarea
+inputEl.addEventListener('input', () => {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = inputEl.scrollHeight + 'px';
+});
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+function addMessage(text, role) {
+  const msg = document.createElement('div');
+  msg.className = `msg ${role}`;
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.textContent = text;
+  msg.appendChild(bubble);
+  messagesEl.appendChild(msg);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return bubble;
+}
+
+function addThinking() {
+  const msg = document.createElement('div');
+  msg.className = 'msg bot';
+  msg.id = 'thinking';
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble thinking-bubble';
+  bubble.innerHTML = '<span></span><span></span><span></span>';
+  msg.appendChild(bubble);
+  messagesEl.appendChild(msg);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function removeThinking() {
+  const t = document.getElementById('thinking');
+  if (t) t.remove();
+}
+
+let busy = false;
+
+async function sendMessage() {
+  const text = inputEl.value.trim();
+  if (!text || busy) return;
+
+  busy = true;
+  sendBtn.disabled = true;
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+
+  addMessage(text, 'user');
+  chatHistory.push({ role: 'user', content: text });
+
+  // Start stickman loading + thinking bubble
+  isLoading = true;
+  addThinking();
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: text,
+        history: chatHistory.slice(0, -1) // send previous turns only
+      })
+    });
+
+    if (!res.ok) {
+      throw new Error('Request failed with status ' + res.status);
+    }
+
+    const data = await res.json();
+    removeThinking();
+    isLoading = false;
+
+    const reply = data.reply || '(No response)';
+    addMessage(reply, 'bot');
+    chatHistory.push({ role: 'assistant', content: reply });
+  } catch (err) {
+    console.error(err);
+    removeThinking();
+    isLoading = false;
+    addMessage("I'm afraid something went wrong contacting the agent. Kindly try again in a moment.", 'bot');
+  } finally {
+    busy = false;
+    sendBtn.disabled = false;
+    inputEl.focus();
+  }
+}
+</script>
+</body>
+</html>
+

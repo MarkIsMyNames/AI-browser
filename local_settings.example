@@ -1,0 +1,24 @@
+# Copy this file to `AI-browser/local_settings` and fill in values.
+# This uses dotenv format: KEY=VALUE lines.
+
+# Choose provider: ollama | openai | azure
+LLM_PROVIDER=azure
+
+# --- Azure OpenAI (LLM_PROVIDER=azure) ---
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_KEY=your-api-key-here
+AZURE_OPENAI_DEPLOYMENT_NAME=your-deployment-name
+AZURE_OPENAI_API_VERSION=2024-02-15-preview
+
+# --- OpenAI (LLM_PROVIDER=openai) ---
+# OPENAI_API_KEY=your-openai-api-key
+# OPENAI_MODEL_ID=gpt-4o-mini
+
+# --- Ollama (LLM_PROVIDER=ollama) ---
+# OLLAMA_BASE_URL=http://localhost:11434/v1
+# OLLAMA_MODEL_ID=llama3.2-vision
+
+# Browser settings
+HEADLESS_MODE=false
+USE_MCP=true
+
